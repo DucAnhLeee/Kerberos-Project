@@ -40,7 +40,9 @@ public class ServiceServerForm extends JFrame {
         tabs.add("Yêu cầu RSA", new JScrollPane(new JTable(requests)));
         tabs.add("Log", new JScrollPane(log));
         add(tabs, BorderLayout.CENTER);
-        pack(); setLocationByPlatform(true);
+        setSize(1100, 700);
+        setMinimumSize(new Dimension(900, 600));
+        setLocationRelativeTo(null);
     }
 
     private JPanel buildControls() {
