@@ -86,6 +86,7 @@ public class ServiceServerForm extends JFrame {
         SecretKey serviceKey = CryptoUtil.taoKhoaTuMatKhau(new String(secret.getPassword()));
         String[] ticket = GiaoThuc.tachThongDiep(CryptoUtil.giaiMa(f[1], serviceKey));
         String user = ticket[0]; String keyEncoded = ticket[1]; long expiry = Long.parseLong(ticket[2]);
+        if (!ticket[3].equals(service.getText().trim())) throw new Exception("Service Ticket dành cho dịch vụ khác");
         String[] auth = GiaoThuc.tachThongDiep(CryptoUtil.giaiMa(f[2], khoa(keyEncoded)));
         if (!auth[0].equals(user) || expiry < System.currentTimeMillis() || !GiaoThuc.timestampHopLe(Long.parseLong(auth[1]))) throw new Exception("Ticket/Authenticator không hợp lệ hoặc hết hạn");
         String replayKey = user + "|" + auth[1]; if (!authenticators.add(replayKey)) throw new Exception("Replay Authenticator bị từ chối");
