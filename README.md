@@ -1,6 +1,6 @@
 # Mô phỏng giao thức Kerberos bằng Java Swing
 
-Đây là project học tập mô phỏng các vai trò Client, KDC (AS/TGS) và FileServer. Mã nguồn dùng Java 17, Swing, TCP Socket và các API mã hóa có sẵn trong JDK. Đây là mô hình minh họa, không phải cài đặt Kerberos chuẩn hoặc hệ thống triển khai an toàn.
+Đây là project học tập mô phỏng các vai trò Client, KDC (AS/TGS) và FileServer. Mã nguồn dùng Java 21, Swing, TCP Socket và các API mã hóa có sẵn trong JDK. Đây là mô hình minh họa, không phải cài đặt Kerberos chuẩn hoặc hệ thống triển khai an toàn.
 
 ## Cấu trúc
 
@@ -19,11 +19,11 @@ src/main/java/org/ADuck/
 Trong IntelliJ chạy lần lượt `KDCAdminForm`, `ServiceServerForm`, `ClientForm`. Mỗi lớp có `main` riêng. Hoặc trong thư mục `src/main/java/org/ADuck/`:
 
 ```text
-javac --release 17 *.java
+javac --release 21 *.java
 java org.ADuck.KDCAdminForm
 ```
 
-Để chạy từ thư mục chứa package, nên biên dịch ra thư mục gốc: `javac --release 17 -d out src/main/java/org/ADuck/*.java`, sau đó `java -cp out org.ADuck.KDCAdminForm` (tương tự với hai form còn lại). KDC mặc định cổng 8888, FileServer 9999. Client mặc định host `localhost`; khi máy khác cùng LAN chạy server, nhập IPv4 LAN hiển thị trên server và cổng tương ứng. Mở cổng firewall nếu cần.
+Để chạy từ thư mục chứa package, nên biên dịch ra thư mục gốc: `javac --release 21 -d out src/main/java/org/ADuck/*.java`, sau đó `java -cp out org.ADuck.KDCAdminForm` (tương tự với hai form còn lại). KDC mặc định cổng 8888, FileServer 9999. Client mặc định host `localhost`; khi máy khác cùng LAN chạy server, nhập IPv4 LAN hiển thị trên server và cổng tương ứng. Mở cổng firewall nếu cần.
 
 Tài khoản mẫu: `an / 123456`, `binh / abc123`. Dịch vụ mẫu: `FileServer`, khóa `FileServer-demo-key`.
 

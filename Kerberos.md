@@ -4,7 +4,7 @@
 
 ### 1.1 Mục tiêu và công nghệ
 
-Project minh họa giao thức xác thực Kerberos bằng ba ứng dụng Java Swing độc lập: Client, KDC đảm nhiệm AS/TGS, và Service Server. Dùng Java 17, thư viện JDK, TCP Socket và AES/GCM/NoPadding. Mã hóa mật khẩu thành khóa dài hạn bằng SHA-256; khóa phiên AES sinh ngẫu nhiên. Mã nguồn package `org.ADuck`, đặt tại `src/main/java/org/ADuck/`. Không dùng JSON/serialization; thông điệp là một dòng, phân tách bằng `|`, ciphertext được biểu diễn Base64. Ba form bắt buộc mỗi form có `main`: `ClientForm.java`, `ServiceServerForm.java`, `KDCAdminForm.java`. File phụ dùng chung tối đa gồm `CryptoUtil.java`, `GiaoThuc.java`, `RsaUtil.java`. Tên hàm/biến tự giải thích, không comment Java; hàm nên ngắn và chỉ làm một nhiệm vụ.
+Project minh họa giao thức xác thực Kerberos bằng ba ứng dụng Java Swing độc lập: Client, KDC đảm nhiệm AS/TGS, và Service Server. Dùng Java 21, thư viện JDK, TCP Socket và AES/GCM/NoPadding. Mã hóa mật khẩu thành khóa dài hạn bằng SHA-256; khóa phiên AES sinh ngẫu nhiên. Mã nguồn package `org.ADuck`, đặt tại `src/main/java/org/ADuck/`. Không dùng JSON/serialization; thông điệp là một dòng, phân tách bằng `|`, ciphertext được biểu diễn Base64. Ba form bắt buộc mỗi form có `main`: `ClientForm.java`, `ServiceServerForm.java`, `KDCAdminForm.java`. File phụ dùng chung tối đa gồm `CryptoUtil.java`, `GiaoThuc.java`, `RsaUtil.java`. Tên hàm/biến tự giải thích, không comment Java; hàm nên ngắn và chỉ làm một nhiệm vụ.
 
 ### 1.2 Sáu thông điệp Kerberos
 
@@ -57,7 +57,7 @@ Thay các nội dung trong ngoặc vuông bằng bằng chứng thật. Với m�
 
 ### Chương 4 – Cài đặt và giao diện (2.000–2.800 từ)
 
-> Viết 2.000–2.800 từ dựa trực tiếp trên các file `CryptoUtil`, `GiaoThuc`, `RsaUtil`, `KDCAdminForm`, `ServiceServerForm`, `ClientForm`. Giải thích Java 17, Swing, Socket, worker/thread, từng khu vực giao diện và ánh xạ từng thông điệp sang tên phương thức thật: `xuLyAS`, `xuLyTGS`, `xuLyAP`, `xuLyYeuCauDichVu`, `sendRsaResult` (kiểm tra tên thực trong code). Nêu cách chạy ba form và cổng mặc định. Ghi chính xác hạn chế: khóa mẫu cố định, lưu bộ nhớ, không phải triển khai Kerberos chuẩn; không tuyên bố về bảng/log/chức năng UI chưa tồn tại. Chèn ảnh chạy thật hoặc placeholder đánh dấu rõ.
+> Viết 2.000–2.800 từ dựa trực tiếp trên các file `CryptoUtil`, `GiaoThuc`, `RsaUtil`, `KDCAdminForm`, `ServiceServerForm`, `ClientForm`. Giải thích Java 21, Swing, Socket, worker/thread, từng khu vực giao diện và ánh xạ từng thông điệp sang tên phương thức thật: `xuLyAS`, `xuLyTGS`, `xuLyAP`, `xuLyYeuCauDichVu`, `sendRsaResult` (kiểm tra tên thực trong code). Nêu cách chạy ba form và cổng mặc định. Ghi chính xác hạn chế: khóa mẫu cố định, lưu bộ nhớ, không phải triển khai Kerberos chuẩn; không tuyên bố về bảng/log/chức năng UI chưa tồn tại. Chèn ảnh chạy thật hoặc placeholder đánh dấu rõ.
 
 ### Chương 5 – Kết quả thử nghiệm (1.500–2.000 từ)
 
@@ -122,3 +122,5 @@ Thay các nội dung trong ngoặc vuông bằng bằng chứng thật. Với m�
 23. Sai cổng Service Server.
 24. KDC/Server chạy với IP LAN, cổng, số kết nối.
 25. Client từ máy khác nhập IP LAN.
+
+
