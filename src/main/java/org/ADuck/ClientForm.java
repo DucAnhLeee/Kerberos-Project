@@ -53,7 +53,10 @@ public class ClientForm extends JFrame {
         tabs.add("Kerberos", buildKerberosPanel());
         tabs.add("Dịch vụ RSA", buildRsaPanel());
         add(tabs, BorderLayout.CENTER);
-        capNhatNut(); pack(); setLocationByPlatform(true);
+        capNhatNut();
+        setSize(1100, 760);
+        setMinimumSize(new Dimension(900, 650));
+        setLocationRelativeTo(null);
     }
 
     private JPanel buildConnectionPanel() {
