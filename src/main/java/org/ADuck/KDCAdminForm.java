@@ -43,12 +43,16 @@ public class KDCAdminForm extends JFrame {
         tabs.add("Lịch sử", new JScrollPane(log));
         add(tabs, BorderLayout.CENTER);
         capNhatUsers();
-        pack();
-        setLocationByPlatform(true);
+        setSize(1100, 700);
+        setMinimumSize(new Dimension(900, 600));
+        setLocationRelativeTo(null);
     }
 
     private JPanel buildControls() {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel p = new JPanel(new GridLayout(3, 1, 4, 2));
+        JPanel serverRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel userRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel serviceRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton start = new JButton("Bật KDC");
         JButton stop = new JButton("Tắt KDC");
         JButton addUser = new JButton("Thêm/đổi mật khẩu");
@@ -61,11 +65,13 @@ public class KDCAdminForm extends JFrame {
         lockUser.addActionListener(e -> khoaUser());
         addService.addActionListener(e -> themDichVu());
         remove.addActionListener(e -> xoaUser());
-        p.add(new JLabel("Cổng")); p.add(port); p.add(start); p.add(stop); p.add(state);
-        p.add(new JLabel("User")); p.add(username); p.add(new JLabel("Mật khẩu")); p.add(password);
-        p.add(addUser); p.add(lockUser); p.add(remove);
-        p.add(new JLabel("Dịch vụ")); p.add(serviceName); p.add(new JLabel("Khóa")); p.add(servicePassword); p.add(addService);
-        p.add(new JLabel("TGT phút")); p.add(tgtMinutes); p.add(new JLabel("Service Ticket phút")); p.add(ticketMinutes);
+        serverRow.add(new JLabel("Cổng")); serverRow.add(port); serverRow.add(start); serverRow.add(stop); serverRow.add(state);
+        userRow.add(new JLabel("User")); userRow.add(username); userRow.add(new JLabel("Mật khẩu")); userRow.add(password);
+        userRow.add(addUser); userRow.add(lockUser); userRow.add(remove);
+        serviceRow.add(new JLabel("Dịch vụ")); serviceRow.add(serviceName); serviceRow.add(new JLabel("Khóa"));
+        serviceRow.add(servicePassword); serviceRow.add(addService); serviceRow.add(new JLabel("TGT phút"));
+        serviceRow.add(tgtMinutes); serviceRow.add(new JLabel("Service Ticket phút")); serviceRow.add(ticketMinutes);
+        p.add(serverRow); p.add(userRow); p.add(serviceRow);
         return p;
     }
 
