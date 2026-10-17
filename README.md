@@ -91,3 +91,4 @@ Trong bản hiện tại, RSA được mở trên client sau AP-REP. Mã hóa d�
 | (p) | Dùng IP LAN từ máy khác | Hỗ trợ theo host/port nhập; cần kiểm tra thực tế mạng/firewall |
 
 Không có ảnh chụp hoặc log chạy giao diện trong repo tại thời điểm tạo tài liệu; kết quả cần được chụp trong lần demo thật.
+# Kerberos-Project
