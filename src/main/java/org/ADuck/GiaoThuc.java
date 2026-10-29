@@ -13,12 +13,22 @@ public final class GiaoThuc {
     private GiaoThuc() {
     }
 
-    public static String taoThongDiep(String... truong) {
-        return String.join("|", truong);
+    public static String taoThongDiep(String... cacTruong) {
+        return String.join("|", cacTruong);
     }
 
-    public static String[] tachThongDiep(String dong) {
-        return dong.split("\\|", -1);
+    public static String[] tachThongDiep(String thongDiep) {
+        if (thongDiep == null) {
+            return new String[0];
+        }
+        return thongDiep.split("\\|", -1);
+    }
+
+    public static String noi(String[] mang, int batDau) {
+        if (mang == null || batDau >= mang.length) {
+            return "";
+        }
+        return String.join("|", Arrays.copyOfRange(mang, batDau, mang.length));
     }
 
     public static String timestamp() {
@@ -30,11 +40,9 @@ public final class GiaoThuc {
     }
 
     public static String rutGon(String duLieu) {
-        if (duLieu == null || duLieu.length() < 28) return duLieu;
+        if (duLieu == null || duLieu.length() < 28) {
+            return duLieu;
+        }
         return duLieu.substring(0, 12) + "..." + duLieu.substring(duLieu.length() - 12);
-    }
-
-    public static String noi(String[] mang, int batDau) {
-        return String.join("|", Arrays.copyOfRange(mang, batDau, mang.length));
     }
 }
