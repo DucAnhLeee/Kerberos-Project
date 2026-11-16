@@ -1,126 +1,145 @@
-# Hồ sơ yêu cầu và hướng dẫn viết báo cáo
+# Protocol and Operations Guide
 
-## 1. Đặc tả project
+## 1. Purpose and scope
 
-### 1.1 Mục tiêu và công nghệ
+Kerberos-Project is an educational Java application that demonstrates ticket-based authentication using three roles:
 
-Project minh họa giao thức xác thực Kerberos bằng ba ứng dụng Java Swing độc lập: Client, KDC đảm nhiệm AS/TGS, và Service Server. Dùng Java 21, thư viện JDK, TCP Socket và AES/GCM/NoPadding. Mã hóa mật khẩu thành khóa dài hạn bằng SHA-256; khóa phiên AES sinh ngẫu nhiên. Mã nguồn package `org.ADuck`, đặt tại `src/main/java/org/ADuck/`. Không dùng JSON/serialization; thông điệp là một dòng, phân tách bằng `|`, ciphertext được biểu diễn Base64. Ba form bắt buộc mỗi form có `main`: `ClientForm.java`, `ServiceServerForm.java`, `KDCAdminForm.java`. File phụ dùng chung tối đa gồm `CryptoUtil.java`, `GiaoThuc.java`, `RsaUtil.java`. Tên hàm/biến tự giải thích, không comment Java; hàm nên ngắn và chỉ làm một nhiệm vụ.
+- **Client** — requests tickets and presents a service ticket to access a service.
+- **Key Distribution Center (KDC)** — combines the Authentication Service (AS) and Ticket-Granting Service (TGS), maintains demo users and services, and issues tickets.
+- **Service server** — validates service tickets and authenticators, then exposes a small RSA demonstration after authentication.
 
-### 1.2 Sáu thông điệp Kerberos
+The exchanges resemble the Kerberos authentication flow, but the messages and cryptographic choices are custom to this project. The application is not an implementation of the Kerberos network protocol defined by an RFC, is not interoperable with Kerberos software, and should not be used as a security boundary.
 
-| # | Thông điệp | Chiều | Nội dung và bảo vệ |
-|---|---|---|---|
-| 1 | AS-REQ | Client → KDC | Tên người dùng |
-| 2 | AS-REP | KDC → Client | Khóa Client-TGS và thời hạn mã hóa bằng khóa dài hạn client; TGT có client, khóa phiên và hạn, mã hóa bằng khóa TGS |
-| 3 | TGS-REQ | Client → KDC | TGT, Authenticator gồm tên và timestamp mã hóa bằng Client-TGS, tên dịch vụ |
-| 4 | TGS-REP | KDC → Client | Khóa Client-Service mã hóa bằng Client-TGS; Service Ticket mã hóa bằng khóa dịch vụ |
-| 5 | AP-REQ | Client → Service Server | Service Ticket và Authenticator mới mã hóa bằng Client-Service |
-| 6 | AP-REP | Service Server → Client | Timestamp + 1 mã hóa bằng Client-Service để client xác minh server |
+## 2. Architecture and runtime
 
-Mô hình yêu cầu TGT mặc định 10 phút, Service Ticket 5 phút; kiểm tra hết hạn, timestamp với độ lệch tối đa hai phút, chống replay, khớp tên Authenticator/ticket. Tài khoản mẫu `an/123456`, `binh/abc123`; FileServer có khóa bí mật. KDC mặc định 8888, dịch vụ 9999.
+Each role is a separate Swing application. The client and service communicate with the KDC over TCP; the client also communicates directly with the service server. The default listening ports are `8888` (KDC) and `9999` (service). The client and service server initially use `localhost`; their host and port fields can be changed for a LAN demonstration.
 
-### 1.3 Giao diện và kết nối
+Start the KDC and service server from their interfaces before connecting the client. The service server also needs the KDC running because it checks the user's and service's current status during AP authentication and before each RSA request. If that check cannot reach the KDC, the service denies the request.
 
-Client đặt khu vực kết nối ở đầu form, host/port nhập được cho cả KDC và dịch vụ. PING/PONG có tên/version, ms, trạng thái màu; timeout ba giây; thao tác mạng chạy nền. AS/TGS phụ thuộc PING KDC; AP phụ thuộc PING server và ticket; RSA phụ thuộc AP-REP. Có hiển thị vé/khóa/hạn, xóa ticket/lịch sử, ngắt kết nối và tùy chọn replay. KDC quản lý user (thêm/xóa/đổi mật khẩu/khóa/mở), dịch vụ và thời hạn vé; theo dõi ticket cấp, kết nối và lỗi. Service Server hiển thị trạng thái/cổng/IP LAN, kết nối, ticket và lịch sử yêu cầu.
+The KDC keeps user accounts, locked-user state, service secrets, and ticket-table rows in memory. The service server keeps authenticated sessions, replay data, RSA key pairs, and request records in memory. Nothing is persisted across application restarts. The KDC's default TGT lifetime is 10 minutes and the service-ticket lifetime is 5 minutes; both can be adjusted in its interface.
 
-### 1.4 RSA sau xác thực
+## 3. Authentication sequence
 
-Chỉ phiên AP-REP mới được gọi dịch vụ RSA. Một yêu cầu chứa `user|sequence|timestamp|lệnh|kích thước|payloadBase64`, được AES-GCM bằng khóa Client-Service rồi Base64. Server kiểm tra phiên, hạn ticket, timestamp, sequence và trạng thái user/dịch vụ hỏi từ KDC rồi mới xử lý. Hỗ trợ `SINH_KHOA`, `MA_HOA`, `GIAI_MA`, RSA 1024/2048 với RSA/ECB/PKCS1Padding, khóa riêng chỉ ở server. Giới hạn rõ 117/245 byte; bản mã 128/256 byte. Dữ liệu ngoài giới hạn, khóa chưa sinh, bản mã sai và replay phải bị từ chối có thông báo.
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant K as KDC (AS/TGS)
+    participant S as Service server
+    C->>K: PING
+    K-->>C: PONG|KDC|1.0
+    C->>S: PING
+    S-->>C: PONG|FileServer|1.0
+    C->>K: AS-REQ (user name)
+    K-->>C: AS-REP (Client–TGS key and TGT)
+    C->>K: TGS-REQ (TGT, authenticator, service name)
+    K-->>C: TGS-REP (Client–Service key and service ticket)
+    C->>S: AP-REQ (service ticket and authenticator)
+    S->>K: CHECK-SERVICE (user and service status)
+    K-->>S: CHECK-OK or CHECK-DENY
+    S-->>C: AP-REP (encrypted timestamp + 1)
+    C->>S: RSA-SVC (encrypted application request)
+    S-->>C: RSA-RES (encrypted application result)
+```
 
-### 1.5 Ca kiểm thử yêu cầu
+The first two pings are optional connectivity checks and are not Kerberos protocol messages. The RSA exchange is a project-specific extension that becomes available after the client validates AP-REP.
 
-(a) AS → TGS → AP thành công; (b) sai mật khẩu; (c) ticket hết hạn; (d) replay Authenticator AP; (e) khóa user; (f) chặn RSA trước AP; (g) RSA-1024 với “Xin chao Kerberos”; (h) RSA-2048 với chuỗi dài hơn, so sánh kích thước và thời gian log thật; (i) quá giới hạn rõ; (j) replay RSA; (k) sai cỡ khóa; (l) KDC tắt và PING lỗi; (m) bật KDC/PONG/AS; (n) sai cổng dịch vụ; (o) tắt server giữa RSA rồi bật lại/PING/AP; (p) hai máy qua IP LAN. Không ghi là đã đạt nếu thiếu log/ảnh chạy thực tế.
+### 3.1 AS exchange: obtain a Ticket-Granting Ticket
 
-### 1.6 Tài liệu và đầu ra
+1. The client sends `AS-REQ|<user>` to the KDC. The request contains the user name, not the password.
+2. If the account exists and is not locked, the KDC creates a random AES session key for the client and TGS and an expiry time.
+3. The KDC returns `AS-REP|<encrypted-client-data>|<TGT>`. The client data contains the session key and expiry and is encrypted using a key derived from the user's password. The TGT contains the user, session key, and expiry and is encrypted using the KDC's fixed TGS key.
+4. The client uses its password to derive the same key and decrypt the client data. A wrong password results in a decryption/authentication failure.
 
-Phải có `README.md`, `HuongDanHam.md`, `Kerberos.md` ở thư mục gốc. Báo cáo Word nếu có `Trang_bia_mau__1_.docx`, giữ mẫu, chỉ thay tên đề tài/học phần, nội dung trung thực, bổ sung hình/bảng, trang và trích dẫn đúng. Mô tả bản mô phỏng tách biệt Kerberos chuẩn (ưu tiên RFC 4120). Mã nguồn vừa tạo chỉ là bản tối thiểu; đối chiếu các hạn chế được ghi cuối `HuongDanHam.md` trước khi viết kết quả hoặc khẳng định chức năng.
+### 3.2 TGS exchange: obtain a service ticket
 
-## 2. Prompt viết báo cáo
+1. The client creates an authenticator containing its user name and current timestamp, encrypts it with the Client–TGS session key, and sends `TGS-REQ|<TGT>|<authenticator>|<service>`.
+2. The KDC decrypts and checks the TGT, confirms that it has not expired, decrypts the authenticator, verifies that its user matches the TGT user, and checks the timestamp.
+3. The KDC creates a Client–Service session key and service-ticket expiry. It returns `TGS-REP|<encrypted-client-data>|<service-ticket>`. The client data is protected with the Client–TGS session key. The service ticket, containing the user, Client–Service session key, expiry, and service name, is protected with the service secret.
 
-Thay các nội dung trong ngoặc vuông bằng bằng chứng thật. Với mọi prompt, tuyệt đối không tự tạo log, kết quả, URL, DOI, nguồn hoặc số liệu. Nếu thiếu thì ghi đúng `[cần bổ sung]` hoặc “Cần chạy và bổ sung”. Trích dẫn chỉ dùng tài liệu đã mở và xác minh.
+The client currently requests the service name `FileServer` in its TGS request.
 
-### Chương 1 – Mở đầu (1.200–1.500 từ)
+### 3.3 AP exchange: authenticate to the service
 
-> Viết Chương 1 bằng tiếng Việt học thuật, dài 1.200–1.500 từ. Trình bày bối cảnh xác thực mạng, rủi ro khi mật khẩu được gửi lặp lại, động cơ chọn Kerberos; mục tiêu tổng quát/cụ thể; đối tượng và phạm vi; phương pháp khảo cứu, phân tích, thiết kế, cài đặt và kiểm thử; giới hạn của mô hình Java Swing; bố cục sáu chương. Phân biệt rõ Kerberos chuẩn với sản phẩm mô phỏng; không nói rằng hệ thống an toàn tuyệt đối. Không bịa số liệu hay tài liệu tham khảo. Đánh dấu `[cần bổ sung: thông tin môn học/đơn vị nếu cần]` ở vị trí cần người viết điền.
+1. The client creates a fresh user-and-timestamp authenticator encrypted with the Client–Service session key. It sends `AP-REQ|<service-ticket>|<authenticator>` directly to the service server.
+2. The server decrypts the service ticket using its configured service secret and checks the service name, expiry, authenticator user, timestamp, and replay set. It then asks the KDC whether the user is still enabled and the service still exists.
+3. If all checks pass, the server stores an in-memory session and returns `AP-REP|<encrypted-timestamp-plus-one>`. The client decrypts the reply and compares it with the timestamp it sent. This demonstrates mutual authentication within this model.
 
-### Chương 2 – Cơ sở lý thuyết (2.800–3.500 từ)
+## 4. Message and transport format
 
-> Viết 2.800–3.500 từ, văn phong học thuật tiếng Việt, trích dẫn số theo tài liệu đã kiểm chứng. Giải thích mô hình tin cậy, client, AS, TGS, dịch vụ; TGT, Service Ticket, Authenticator; khóa dài hạn và khóa phiên; lần lượt giải thích sáu thông điệp và bảng Kerberos v4/v5. Phân tích ưu/nhược điểm, đồng bộ thời gian, replay và cách phòng chống; trình bày Golden Ticket, Kerberoasting và biện pháp giảm thiểu ở mức khái niệm, không hướng dẫn xâm nhập. Ưu tiên RFC 4120 và đối chiếu rõ phần nào là chuẩn, phần nào là mô phỏng. Không suy diễn rằng code demo có các cơ chế bảo vệ production.
+Application messages are UTF-8 text, one line per TCP connection. Fields are separated by the `|` character. Encrypted values are Base64 strings. Each request opens a socket, writes one line, reads one response line, and closes the connection. The client uses a three-second timeout for pings, five seconds for ticket exchanges, and ten seconds for RSA requests; the service's KDC status check uses a three-second timeout.
 
-### Mục RSA gắn với Kerberos trong Chương 2 (1.800–2.400 từ)
+Principal message forms are:
 
-> Viết 1.800–2.400 từ học thuật về RSA, cặp khóa, modulus và padding; mô tả chính xác `RSA/ECB/PKCS1Padding`, công thức giới hạn plaintext modulus-bytes trừ 11, các mức 117/245 byte và ciphertext 128/256 byte. So sánh RSA 1024/2048 về kích thước và giới hạn; không kết luận benchmark tốc độ nếu chưa có log đo thật, để `[cần bổ sung log đo]`. Giải thích vì sao RSA không phù hợp dữ liệu dài, vì sao Kerberos truyền thống chủ yếu dùng mật mã đối xứng, và vì sao tiện ích RSA trong demo chỉ mở sau AP-REP. Nêu rõ đây là phần mở rộng ứng dụng, không thuộc sáu thông điệp Kerberos chuẩn. Cảnh báo RSA-1024 và PKCS#1 v1.5 chỉ dùng minh họa, không khuyến nghị cho hệ thống mới. Không bịa trích dẫn; đánh dấu `[cần kiểm tra nguồn]`.
+| Message | Direction | Purpose |
+|---|---|---|
+| `PING` / `PONG` | Client → KDC or service / response | Connectivity and service identification (`PONG` includes version `1.0`). |
+| `AS-REQ` / `AS-REP` | Client ↔ KDC | Request and receive client session data plus a TGT. |
+| `TGS-REQ` / `TGS-REP` | Client ↔ KDC | Exchange a TGT and authenticator for a service ticket. |
+| `AP-REQ` / `AP-REP` | Client ↔ service | Present a service ticket and authenticator; prove the server knows the session key. |
+| `CHECK-SERVICE` | Service → KDC | Check whether a user remains unlocked and the service remains registered. |
+| `RSA-SVC` / `RSA-RES` | Client ↔ service | Carry an authenticated, encrypted RSA operation and its response. |
+| `ERR` / `RSA-ERR` | Server → client | Report an invalid or failed operation. |
 
-### Chương 3 – Phân tích và thiết kế (2.000–2.600 từ)
+## 5. Cryptographic operations
 
-> Viết 2.000–2.600 từ, nêu yêu cầu chức năng và phi chức năng, tác nhân, kiến trúc ba vai trò, sơ đồ thành phần/tuần tự, mô hình dữ liệu lưu trong bộ nhớ, định dạng dòng và Base64. Lập bảng trường của sáu thông điệp; mô tả quản lý khóa, timestamp lệch tối đa hai phút, ticket expiry, replay cache/sequence và PING/PONG timeout. Đối chiếu từng thiết kế với code hiện tại và ghi hạn chế ở `[cần bổ sung hoặc chưa triển khai]`. Không trình bày thiết kế mong muốn như tính năng đã chạy.
+### 5.1 AES and key derivation
 
-### Chương 4 – Cài đặt và giao diện (2.000–2.800 từ)
+The project encrypts ticket data, authenticators, RSA requests, and RSA responses with `AES/GCM/NoPadding`. Each encryption uses a random 12-byte nonce and a 128-bit GCM authentication tag; the nonce is prepended to the ciphertext and tag before Base64 encoding. Session keys are generated as random 256-bit AES keys.
 
-> Viết 2.000–2.800 từ dựa trực tiếp trên các file `CryptoUtil`, `GiaoThuc`, `RsaUtil`, `KDCAdminForm`, `ServiceServerForm`, `ClientForm`. Giải thích Java 21, Swing, Socket, worker/thread, từng khu vực giao diện và ánh xạ từng thông điệp sang tên phương thức thật: `xuLyAS`, `xuLyTGS`, `xuLyAP`, `xuLyYeuCauDichVu`, `sendRsaResult` (kiểm tra tên thực trong code). Nêu cách chạy ba form và cổng mặc định. Ghi chính xác hạn chế: khóa mẫu cố định, lưu bộ nhớ, không phải triển khai Kerberos chuẩn; không tuyên bố về bảng/log/chức năng UI chưa tồn tại. Chèn ảnh chạy thật hoặc placeholder đánh dấu rõ.
+For the demonstration, a password-derived key is made by hashing the UTF-8 password once with SHA-256 and using the 32-byte digest as an AES key. This is not a password hashing or key-derivation scheme suitable for real credentials: it has no salt or work factor. The TGS key is derived the same way from the fixed source-code value `Kerberos-TGS-demo-key`. User and service secrets are demonstration values and are not protected by persistent secret storage.
 
-### Chương 5 – Kết quả thử nghiệm (1.500–2.000 từ)
+### 5.2 RSA service extension
 
-> Viết 1.500–2.000 từ. Tạo bảng cột: mã ca, tiền điều kiện, thao tác, kết quả mong đợi, quan sát/log/ảnh thật, đạt/chưa đạt. Bao gồm ca (a)–(p) của đặc tả. Chỉ điền kết quả quan sát được từ log hoặc ảnh gốc; mọi ca chưa chạy phải ghi nguyên văn “Cần chạy và bổ sung”. Số đo thời gian RSA chỉ trích từ lần chạy cụ thể, nêu môi trường và cách đo; không ngoại suy. Không bịa thông tin máy, số lần chạy, ms hoặc ảnh. Nêu sai khác giữa yêu cầu và code.
+After AP-REP succeeds, the client can request `SINH_KHOA`, `MA_HOA`, or `GIAI_MA` for a 1024-bit or 2048-bit RSA key. RSA key generation and private-key operations occur in the service-server process. The server returns the public key in Base64 form to the client. RSA requests are AES-GCM protected with the Client–Service session key and include the user name, monotonically increasing sequence number, timestamp, operation, key size, and payload. The service checks the active session, expiry, timestamp, sequence number, and current KDC status before performing the operation.
 
-### Chương 6 – Kết luận và hướng phát triển (800–1.100 từ)
+The implementation uses `RSA/ECB/PKCS1Padding`. With PKCS#1 v1.5 encryption padding, the maximum plaintext length is the modulus length in bytes minus 11: 117 bytes for RSA-1024 and 245 bytes for RSA-2048. Ciphertexts are 128 and 256 bytes respectively, before Base64 encoding. This feature is an application demonstration, not part of the AS/TGS/AP ticket exchange. RSA-1024 and PKCS#1 v1.5 are included for educational comparison and are not recommended for new systems.
 
-> Viết 800–1.100 từ, tổng kết mục tiêu nào đạt theo bằng chứng, kiến thức rút ra và giới hạn còn lại. Đề xuất hướng phát triển cụ thể: quản lý bí mật an toàn, giao thức chuẩn, cache replay có thời hạn, cấu hình ticket, kiểm thử tự động, giao diện log màu và đo hiệu năng lặp lại. Không khẳng định an toàn tuyệt đối hoặc thành công ở ca chưa chạy. Tách nhận xét cá nhân khỏi kết quả kỹ thuật.
+## 6. Validation and replay behavior
 
-### Prompt tài liệu tham khảo
+- TGT and service-ticket expiries are checked when the ticket is used.
+- Authenticator timestamps must be within two minutes of the local system clock.
+- The service server rejects an AP authenticator already seen during the current process lifetime.
+- RSA requests must have a sequence number greater than the last accepted sequence for that in-memory user session.
+- The AS checks that the account exists and is unlocked; the TGS checks that the requested service is registered. The service server rechecks current user/service status at AP and RSA time.
 
-> Lập danh mục tài liệu tham khảo kiểu đánh số, chỉ dùng nguồn đã truy cập và xác minh được nội dung, tác giả, năm, tiêu đề, nhà xuất bản và URL/DOI. Ưu tiên RFC 4120, RFC 1510, RFC 8017, bài Kerberos gốc của Steiner, Neuman, Schiller (1988), Neuman và Ts'o (1994), tài liệu Oracle về JCA, Swing và Socket, NIST SP 800-57 và SP 800-131A. Nếu chưa xác minh trường nào, ghi `[cần kiểm tra]` và không tự đoán. Đảm bảo mọi trích dẫn [n] trong bài khớp chính xác danh mục.
+These controls are limited to this demo. The TGS does not maintain an authenticator replay cache, the service's AP replay set has no expiry or size limit, and all state is lost on restart. Clock checks assume the machines have reasonably synchronized clocks. The implementation does not include the full message formats, negotiation, key management, or operational safeguards of standard Kerberos.
 
-### Prompt tổng hợp và biên tập
+## 7. Interface behavior
 
-> Ghép các chương thành báo cáo nhất quán; thống nhất Kerberos, KDC, AS, TGS, TGT, Service Ticket, Authenticator, khóa phiên. Kiểm tra độ dài từng prompt, số thứ tự hình/bảng, trích dẫn, tính trung thực với code và kết quả. Giữ nguyên `[cần bổ sung]`, “Cần chạy và bổ sung” và `[cần kiểm tra]`; không tự điền. Không thêm ảnh/log/số liệu giả. Kiểm tra mọi lời khẳng định chức năng bằng source hiện tại; nếu code chưa có thì sửa lời mô tả hoặc nêu hạn chế.
+### KDC administration window
 
-## 3. Dàn ý đầy đủ báo cáo
+The KDC window starts and stops the listener, displays the bound address, and lets the operator add or update users, lock/unlock or remove users, and add services. It also exposes the TGT and service-ticket lifetime controls, a table of issued tickets, and an activity log. User credentials, lock status, service secrets, and ticket rows are held in memory.
 
-1. Trang bìa theo mẫu; để trống thông tin cá nhân.
-2. Lời cảm ơn.
-3. Tóm tắt và từ khóa.
-4. Mục lục.
-5. Danh mục hình.
-6. Danh mục bảng.
-7. Danh mục từ viết tắt.
-8. Chương 1. Mở đầu.
-9. Chương 2. Cơ sở lý thuyết (gồm mục RSA).
-10. Chương 3. Phân tích và thiết kế (tích hợp kết nối/RSA).
-11. Chương 4. Cài đặt và giao diện.
-12. Chương 5. Kết quả thử nghiệm.
-13. Chương 6. Kết luận và hướng phát triển.
-14. Tài liệu tham khảo.
-15. Phụ lục (mã nguồn/biên bản chạy phù hợp).
+### Service server window
 
-## 4. Danh sách 25 hình cần chèn
+The service window starts and stops the listener and configures the service name, service secret, port, and KDC address. Tabs show accepted service tickets, generated public-key summaries, RSA request results and timings, and the activity log. Private RSA keys are kept in the service process and are not displayed in the key table.
 
-Ảnh giao diện phải chụp từ lần chạy thật, không sửa log. Nếu chưa có bằng chứng, để placeholder vàng nhạt và ghi “Cần chạy và bổ sung”. Mỗi ảnh phải được dẫn trong nội dung, chú thích đánh số theo chương.
+### Client window
 
-1. Sơ đồ kiến trúc Client–KDC–Service Server.
-2. Sơ đồ tuần tự sáu thông điệp Kerberos.
-3. KDC lúc khởi động.
-4. Client sau AS-REP.
-5. Client sau TGS-REP.
-6. AP thành công.
-7. Sai mật khẩu hoặc user không tồn tại.
-8. Ticket hết hạn.
-9. Replay Authenticator bị từ chối.
-10. Tài khoản bị khóa.
-11. Bảng ticket KDC.
-12. RSA bị khóa trước AP.
-13. RSA bật sau AP-REP.
-14. Bảng khóa RSA trên server, không lộ private key.
-15. Bảng yêu cầu và thống kê RSA.
-16. RSA-1024 mã hóa/giải mã “Xin chao Kerberos”.
-17. So sánh bản mã 1024/2048 (128/256 byte) và thời gian đo thật.
-18. Lỗi plaintext quá giới hạn và giải mã sai cỡ khóa.
-19. Replay RSA bị từ chối.
-20. Client chưa kết nối (xám).
-21. PING thành công (xanh, tên/version/ms).
-22. Lỗi kết nối khi KDC chưa bật.
-23. Sai cổng Service Server.
-24. KDC/Server chạy với IP LAN, cổng, số kết nối.
-25. Client từ máy khác nhập IP LAN.
+The client window configures both endpoint addresses and offers ping, AS, TGS, AP, disconnect, and ticket-clearing controls. A separate RSA tab exposes key generation, encryption, decryption, and replay demonstrations. RSA controls are enabled after successful AP-REP validation. Ticket fields and activity messages are displayed in the interface for inspection.
 
+The interfaces and logs are part of the demonstration and are not a durable audit trail. The GUI labels are currently in Vietnamese.
 
+## 8. Known limitations
+
+- This is a custom demonstration protocol, not standard Kerberos and not interoperable with a KDC or service using Kerberos.
+- TCP traffic is not protected by TLS. Although selected message contents are encrypted, endpoint identities and protocol metadata are not protected as they would be in a production protocol.
+- Demo passwords and service secrets are embedded as defaults; the TGS key is hard-coded. Password-to-key conversion is a single SHA-256 operation.
+- Account, service, ticket, session, replay, and RSA key data are held in process memory and are not persisted.
+- The TGS has no replay cache for its authenticators. The AP replay set is unbounded and lasts only until the service process exits.
+- Client and service behavior is tailored to the single `FileServer` demonstration; there is no configurable client-side service selection.
+- No automated test suite or recorded execution evidence is included in this repository. Do not describe a scenario as passed unless it has been run and supported with actual logs or screenshots.
+
+## 9. Source map
+
+| File | Responsibility |
+|---|---|
+| `ClientForm.java` | Client UI, endpoint pings, AS/TGS/AP requests, and RSA client operations. |
+| `KDCAdminForm.java` | KDC listener, in-memory account and service administration, and AS/TGS handling. |
+| `ServiceServerForm.java` | Service listener, AP checks, KDC status checks, and RSA operations. |
+| `CryptoUtil.java` | AES-GCM encryption, session-key creation, and password-to-key helper. |
+| `GiaoThuc.java` | Default ports, protocol version, field helpers, and timestamp validation. |
+| `RsaUtil.java` | RSA key generation, size limits, encryption, and decryption. |
+| `DemoLauncher.java` | Optional convenience launcher for the desktop forms. |
+
+Gradle run tasks and startup instructions are documented in the [README](README.md).
