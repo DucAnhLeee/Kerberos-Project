@@ -21,17 +21,17 @@ public class KDCAdminForm extends JFrame {
     private final JSpinner tgtMinutes = new JSpinner(new SpinnerNumberModel(10, 1, 1440, 1));
     private final JSpinner ticketMinutes = new JSpinner(new SpinnerNumberModel(5, 1, 1440, 1));
     private final JLabel state = new JLabel("Đã dừng");
+    private final JButton start = new JButton("Khởi động");
+    private final JButton stop = new JButton("Dừng máy chủ");
     private final JTextArea log = new JTextArea(12, 65);
-    private final DefaultTableModel usersModel = new DefaultTableModel(new String[]{"Người dùng", "Trạng thái"}, 0);
-    private final DefaultTableModel ticketsModel = new DefaultTableModel(new String[]{"Loại", "Người dùng", "Dịch vụ", "Hết hạn"}, 0);
+    private final DefaultTableModel usersModel = FormSupport.model("Người dùng", "Trạng thái");
+    private final DefaultTableModel ticketsModel = FormSupport.model("Loại", "Người dùng", "Dịch vụ", "Hết hạn");
 
     private final Map<String, String> users = new ConcurrentHashMap<>();
     private final Set<String> locked = ConcurrentHashMap.newKeySet();
     private final Map<String, String> services = new ConcurrentHashMap<>();
 
-    private volatile boolean running;
-    private volatile ServerSocket server;
-    private int connections;
+    private final java.util.concurrent.atomic.AtomicInteger connections = new java.util.concurrent.atomic.AtomicInteger();
 
     public KDCAdminForm() {
         super("Kerberos KDC - Quản trị");
@@ -39,32 +39,39 @@ public class KDCAdminForm extends JFrame {
         users.put("binh", "abc123");
         services.put("FileServer", "FileServer-demo-key");
 
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
+        setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setLayout(new BorderLayout(6, 6));
 
         add(buildControls(), BorderLayout.NORTH);
 
         JTabbedPane tabs = new JTabbedPane();
-        tabs.add("Người dùng", new JScrollPane(new JTable(usersModel)));
+        JTable userTable = new JTable(usersModel);
+        userTable.getSelectionModel().addListSelectionListener(e -> {
+            int row = userTable.getSelectedRow();
+            if (!e.getValueIsAdjusting() && row >= 0) {
+                username.setText(usersModel.getValueAt(userTable.convertRowIndexToModel(row), 0).toString());
+                password.setText("");
+            }
+        });
+        tabs.add("Người dùng", new JScrollPane(userTable));
         tabs.add("Vé đã cấp", new JScrollPane(new JTable(ticketsModel)));
         tabs.add("Lịch sử", new JScrollPane(log));
         add(tabs, BorderLayout.CENTER);
 
         capNhatUsers();
-        setSize(1100, 700);
+        DesktopTheme.finish(this, "Trung tâm phân phối khóa", "Quản trị tài khoản · Dịch vụ · Cấp phát vé Kerberos");
+        setSize(1180, 900);
         setMinimumSize(new Dimension(900, 600));
         setLocationRelativeTo(null);
     }
 
     private JPanel buildControls() {
-        JPanel panel = new JPanel(new GridLayout(3, 1, 4, 2));
 
         JPanel serverRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JPanel userRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JPanel serviceRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
 
-        JButton start = new JButton("Bật KDC");
-        JButton stop = new JButton("Tắt KDC");
+        stop.setEnabled(false);
         JButton addUser = new JButton("Thêm/đổi mật khẩu");
         JButton lockUser = new JButton("Khóa/mở user");
         JButton addService = new JButton("Thêm dịch vụ");
@@ -101,56 +108,62 @@ public class KDCAdminForm extends JFrame {
         serviceRow.add(new JLabel("Service Ticket phút"));
         serviceRow.add(ticketMinutes);
 
-        panel.add(serverRow);
-        panel.add(userRow);
-        panel.add(serviceRow);
-
-        return panel;
+        return DesktopTheme.stack(
+                DesktopTheme.card("Điều khiển KDC", DesktopTheme.stack(
+                        DesktopTheme.fields("Cổng lắng nghe", port), DesktopTheme.actions(start, stop, state))),
+                DesktopTheme.card("Quản lý tài khoản", DesktopTheme.stack(
+                        DesktopTheme.fields("Tên đăng nhập", username, "Mật khẩu", password),
+                        DesktopTheme.actions(addUser, lockUser, remove))),
+                DesktopTheme.card("Dịch vụ và thời hạn vé", DesktopTheme.stack(
+                        DesktopTheme.fields("Tên dịch vụ", serviceName, "Khóa dịch vụ", servicePassword,
+                                "TGT (phút)", tgtMinutes, "Vé dịch vụ (phút)", ticketMinutes),
+                        DesktopTheme.actions(addService))));
     }
 
+    private final ServerLifecycle lifecycle = new ServerLifecycle();
+    private volatile int tgtLifetime = 10;
+    private volatile int serviceLifetime = 5;
+
     private void startServer() {
-        new SwingWorker<Void, Void>() {
-            @Override
-            protected Void doInBackground() throws Exception {
-                int portNumber = Integer.parseInt(port.getText().trim());
-                server = new ServerSocket(portNumber);
-                running = true;
-
-                SwingUtilities.invokeLater(() -> {
-                    state.setText("Đang chạy - " + diaChiLan() + ":" + port.getText());
-                });
-
-                while (running) {
-                    Socket socket = server.accept();
-                    connections++;
-                    new Thread(() -> phucVu(socket), "kdc-client").start();
-                }
-                return null;
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    get();
-                } catch (Exception ex) {
-                    if (running) {
-                        ghi("Lỗi cổng: " + ex.getMessage(), false);
-                    }
-                    state.setText("Lỗi/Đã dừng");
-                }
-            }
-        }.execute();
+        try {
+            if (lifecycle.state() == ServerLifecycle.State.RUNNING || lifecycle.state() == ServerLifecycle.State.STARTING || lifecycle.state() == ServerLifecycle.State.STOPPING) return;
+            int number = FormSupport.port(port.getText());
+            tgtLifetime = (Integer) tgtMinutes.getValue();
+            serviceLifetime = (Integer) ticketMinutes.getValue();
+            lifecycle.start(number, this::phucVu, text -> {
+                state.setText(text);
+                start.setEnabled(lifecycle.state() == ServerLifecycle.State.ERROR);
+                stop.setEnabled(lifecycle.state() != ServerLifecycle.State.ERROR);
+                boolean editable = lifecycle.state() == ServerLifecycle.State.ERROR;
+                port.setEnabled(editable);
+                tgtMinutes.setEnabled(editable);
+                ticketMinutes.setEnabled(editable);
+            });
+            port.setEnabled(false);
+            tgtMinutes.setEnabled(false);
+            ticketMinutes.setEnabled(false);
+        } catch (IllegalArgumentException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Cấu hình chưa hợp lệ", JOptionPane.WARNING_MESSAGE);
+        }
     }
 
     private void stopServer() {
-        running = false;
-        try {
-            if (server != null && !server.isClosed()) {
-                server.close();
-            }
-        } catch (IOException ignored) {
-        }
-        state.setText("Đã dừng");
+        state.setText("Đang dừng…");
+        start.setEnabled(false);
+        stop.setEnabled(false);
+        lifecycle.stop(() -> {
+            port.setEnabled(true);
+            tgtMinutes.setEnabled(true);
+            ticketMinutes.setEnabled(true);
+            start.setEnabled(true);
+            state.setText("Đã dừng");
+        });
+    }
+
+    @Override
+    public void dispose() {
+        lifecycle.close();
+        super.dispose();
     }
 
     private void phucVu(Socket socket) {
@@ -164,7 +177,7 @@ public class KDCAdminForm extends JFrame {
             }
 
             String[] cacTruong = GiaoThuc.tachThongDiep(request);
-            ghi("Kết nối " + socket.getInetAddress().getHostAddress() + " lệnh " + cacTruong[0] + " (" + connections + ")", true);
+            ghi("Kết nối " + socket.getInetAddress().getHostAddress() + " lệnh " + cacTruong[0] + " (" + connections.incrementAndGet() + ")", true);
 
             String response = xuLy(cacTruong);
             out.write(response);
@@ -207,7 +220,7 @@ public class KDCAdminForm extends JFrame {
         SecretKey tgsKey = CryptoUtil.taoKhoaTuMatKhau(GiaoThuc.TGS_KEY_PASSWORD);
 
         String sessionKey = Base64.getEncoder().encodeToString(CryptoUtil.taoKhoaPhien().getEncoded());
-        long expiry = System.currentTimeMillis() + ((Integer) tgtMinutes.getValue()) * 60000L;
+        long expiry = System.currentTimeMillis() + tgtLifetime * 60000L;
 
         String tgt = CryptoUtil.maHoa(user + "|" + sessionKey + "|" + expiry, tgsKey);
         String encryptedSession = CryptoUtil.maHoa(sessionKey + "|" + expiry, clientKey);
@@ -242,7 +255,7 @@ public class KDCAdminForm extends JFrame {
             throw new Exception("Dịch vụ không tồn tại");
         }
 
-        long serviceTicketExpiry = System.currentTimeMillis() + ((Integer) ticketMinutes.getValue()) * 60000L;
+        long serviceTicketExpiry = System.currentTimeMillis() + serviceLifetime * 60000L;
         String sessionKeyClientService = Base64.getEncoder().encodeToString(CryptoUtil.taoKhoaPhien().getEncoded());
         SecretKey serviceKey = CryptoUtil.taoKhoaTuMatKhau(services.get(targetService));
 
@@ -265,13 +278,19 @@ public class KDCAdminForm extends JFrame {
     private void themUser() {
         String user = username.getText().trim();
         String pass = new String(password.getPassword());
+        if (!validEntry(user, pass)) return;
         users.put(user, pass);
+        password.setText("");
         capNhatUsers();
         ghi("Đã thêm/cập nhật user", true);
     }
 
     private void khoaUser() {
         String user = username.getText().trim();
+        if (!users.containsKey(user)) {
+            ghi("Tài khoản không tồn tại", false);
+            return;
+        }
         if (!locked.remove(user)) {
             locked.add(user);
         }
@@ -280,6 +299,11 @@ public class KDCAdminForm extends JFrame {
 
     private void xoaUser() {
         String user = username.getText().trim();
+        if (!users.containsKey(user)) {
+            ghi("Tài khoản không tồn tại", false);
+            return;
+        }
+        if (JOptionPane.showConfirmDialog(this, "Xóa tài khoản " + user + "?", "Xác nhận xóa", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION) return;
         users.remove(user);
         locked.remove(user);
         capNhatUsers();
@@ -288,8 +312,20 @@ public class KDCAdminForm extends JFrame {
     private void themDichVu() {
         String name = serviceName.getText().trim();
         String secret = new String(servicePassword.getPassword());
+        if (!validEntry(name, secret)) return;
         services.put(name, secret);
         ghi("Đã lưu dịch vụ " + name, true);
+    }
+
+    private boolean validEntry(String name, String secret) {
+        try {
+            FormSupport.required(name, "Tên");
+            FormSupport.required(secret, "Mật khẩu/khóa");
+            return true;
+        } catch (IllegalArgumentException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Dữ liệu chưa hợp lệ", JOptionPane.WARNING_MESSAGE);
+            return false;
+        }
     }
 
     private void capNhatUsers() {
@@ -305,19 +341,11 @@ public class KDCAdminForm extends JFrame {
         return new SecretKeySpec(keyBytes, "AES");
     }
 
-    private String diaChiLan() {
-        try {
-            return InetAddress.getLocalHost().getHostAddress();
-        } catch (Exception ex) {
-            return "localhost";
-        }
-    }
-
     private void ghi(String thongDiep, boolean ok) {
         SwingUtilities.invokeLater(() -> {
             String gio = new SimpleDateFormat("HH:mm:ss").format(new Date());
             String trangThai = ok ? "[THÀNH CÔNG] " : "[THẤT BẠI] ";
-            log.append("[" + gio + "] " + trangThai + thongDiep + "\n");
+            FormSupport.appendLog(log, "[" + gio + "] " + trangThai + thongDiep + "\n");
         });
     }
 

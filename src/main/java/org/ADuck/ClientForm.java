@@ -1,15 +1,38 @@
 package org.ADuck;
 
-import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
-import javax.swing.*;
-import java.awt.*;
-import java.io.*;
-import java.net.*;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.awt.GridLayout;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Base64;
 import java.util.Date;
+
+import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
+import javax.swing.JButton;
+import javax.swing.JComboBox;
+import javax.swing.JFrame;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JPasswordField;
+import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
+import javax.swing.JTabbedPane;
+import javax.swing.JTextArea;
+import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 
 public class ClientForm extends JFrame {
     private final JTextField kdcHost = new JTextField("localhost", 10);
@@ -39,6 +62,18 @@ public class ClientForm extends JFrame {
     private final JTextField resultText = new JTextField(25);
     private final JComboBox<Integer> bits = new JComboBox<>(new Integer[]{1024, 2048});
 
+    private boolean kdcConnected;
+    private boolean serverConnected;
+    private boolean busy;
+    private String tgtSessionKey;
+    private long tgtExpiry;
+    private Input input;
+    private final JLabel activity = new JLabel("Sẵn sàng");
+    private final java.util.Map<java.awt.Component, Boolean> enabledBefore = new java.util.IdentityHashMap<>();
+    private final javax.swing.Timer expiryTimer = new javax.swing.Timer(1000, e -> expireTickets());
+    private record Input(String kdcHost, int kdcPort, String serverHost, int serverPort,
+                         String username, String password, int bits, String cipher) {}
+
     private String tgt;
     private String serviceTicket;
     private String sessionKey;
@@ -61,14 +96,36 @@ public class ClientForm extends JFrame {
         tabs.add("Dịch vụ RSA", buildRsaPanel());
         add(tabs, BorderLayout.CENTER);
 
+        resultText.setEditable(false);
+        bits.setSelectedItem(2048);
+        bits.addActionListener(e -> {
+            rsaKeyReady = false;
+            capNhatNut();
+        });
+        DesktopTheme.finish(this, "Kerberos Client", "Xác thực hai chiều · Vé dịch vụ · Mã hóa RSA");
+        expiryTimer.start();
+        javax.swing.event.DocumentListener changed = new javax.swing.event.DocumentListener() {
+            private void changed() {
+                if (busy) return;
+                xoaTicket();
+                kdcConnected = false;
+                serverConnected = false;
+                setState(true, "Cần kiểm tra kết nối", Color.GRAY);
+                setState(false, "Cần kiểm tra kết nối", Color.GRAY);
+                capNhatNut();
+            }
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { changed(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { changed(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { changed(); }
+        };
+        for (JTextField field : new JTextField[]{kdcHost, kdcPort, serverHost, serverPort, username, password}) field.getDocument().addDocumentListener(changed);
         capNhatNut();
-        setSize(1100, 760);
+        setSize(1180, 850);
         setMinimumSize(new Dimension(900, 650));
         setLocationRelativeTo(null);
     }
 
     private JPanel buildConnectionPanel() {
-        JPanel panel = new JPanel(new GridLayout(2, 1));
         JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT));
 
         JButton pingKdc = new JButton("Kết nối KDC");
@@ -92,8 +149,14 @@ public class ClientForm extends JFrame {
         row.add(serverState);
         row.add(disconnect);
 
-        panel.add(row);
-        return panel;
+        JPanel endpoints = new JPanel(new GridLayout(1, 2, 16, 0));
+        endpoints.add(DesktopTheme.card("Trung tâm phân phối khóa", DesktopTheme.stack(
+                DesktopTheme.fields("Máy chủ", kdcHost, "Cổng", kdcPort),
+                DesktopTheme.actions(pingKdc, kdcState))));
+        endpoints.add(DesktopTheme.card("Máy chủ dịch vụ", DesktopTheme.stack(
+                DesktopTheme.fields("Máy chủ", serverHost, "Cổng", serverPort),
+                DesktopTheme.actions(pingServer, serverState))));
+        return DesktopTheme.stack(endpoints, DesktopTheme.actions(disconnect, activity));
     }
 
     private JPanel buildKerberosPanel() {
@@ -130,13 +193,17 @@ public class ClientForm extends JFrame {
         JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, new JScrollPane(ticketInfo), new JScrollPane(log));
         split.setResizeWeight(0.25);
 
-        panel.add(actions, BorderLayout.NORTH);
+        panel.add(DesktopTheme.card("1. Tài khoản và xác thực", DesktopTheme.stack(
+                DesktopTheme.fields("Tên đăng nhập", username, "Mật khẩu", password),
+                DesktopTheme.actions(asButton, tgsButton, apButton),
+                DesktopTheme.actions(replay, clear, clearLog))), BorderLayout.NORTH);
+        split.setTopComponent(DesktopTheme.card("Thông tin vé", new JScrollPane(ticketInfo)));
+        split.setBottomComponent(DesktopTheme.card("Nhật ký hoạt động", new JScrollPane(log)));
         panel.add(split, BorderLayout.CENTER);
         return panel;
     }
 
     private JPanel buildRsaPanel() {
-        JPanel panel = new JPanel(new GridLayout(6, 1));
 
         JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton replay = new JButton("Replay RSA");
@@ -165,18 +232,29 @@ public class ClientForm extends JFrame {
         result.add(new JLabel("Kết quả"));
         result.add(resultText);
 
-        panel.add(row);
-        panel.add(clear);
-        panel.add(crypt);
-        panel.add(result);
-        panel.add(new JScrollPane(new JTextArea("RSA dùng khóa do Service Server tạo; private key không gửi về Client.", 3, 60)));
+        return DesktopTheme.stack(
+                DesktopTheme.card("2. Khóa RSA", DesktopTheme.stack(
+                        DesktopTheme.fields("Độ dài khóa (bit)", bits),
+                        DesktopTheme.actions(rsaKeyButton, rsaGate))),
+                DesktopTheme.card("3. Mã hóa và giải mã", DesktopTheme.stack(
+                        DesktopTheme.fields("Bản rõ UTF-8", clearText, "Bản mã Base64", cipherText, "Kết quả", resultText),
+                        DesktopTheme.actions(rsaEncryptButton, rsaDecryptButton))),
+                DesktopTheme.card("Kiểm thử nâng cao", DesktopTheme.actions(replay)));
 
-        return panel;
     }
 
     private void ping(boolean isKdc) {
         String host = isKdc ? kdcHost.getText().trim() : serverHost.getText().trim();
         String portText = isKdc ? kdcPort.getText().trim() : serverPort.getText().trim();
+        if (busy) return;
+        try {
+            FormSupport.required(host, "Máy chủ");
+            FormSupport.port(portText);
+        } catch (IllegalArgumentException ex) {
+            ghi(ex.getMessage(), false);
+            return;
+        }
+        setBusy(true);
         setState(isKdc, "Đang kiểm tra", Color.GRAY);
 
         new SwingWorker<String, Void>() {
@@ -197,22 +275,27 @@ public class ClientForm extends JFrame {
                         throw new Exception(answer);
                     }
                     long elapsedMs = (System.nanoTime() - started) / 1000000;
+                    if (isKdc) kdcConnected = true; else serverConnected = true;
                     setState(isKdc, answer + " · " + elapsedMs + " ms", new Color(0, 130, 30));
                     ghi("[KẾT NỐI] " + host + ":" + portText + " " + answer + " thành công", true);
                 } catch (Exception ex) {
+                    if (isKdc) kdcConnected = false; else serverConnected = false;
                     setState(isKdc, "Lỗi kết nối: " + thongBao(ex), Color.RED);
                     ghi("[KẾT NỐI] " + host + ":" + portText + " lỗi " + thongBao(ex), false);
                 }
+                setBusy(false);
                 capNhatNut();
             }
         }.execute();
     }
 
     private void dangNhap() {
+        if (busy) return;
+        xoaTicket();
         chayNen("AS-REQ", () -> {
-            String host = kdcHost.getText().trim();
-            int port = Integer.parseInt(kdcPort.getText().trim());
-            String user = username.getText().trim();
+            String host = input.kdcHost();
+            int port = input.kdcPort();
+            String user = input.username();
 
             String answer = gui(host, port, "AS-REQ|" + user, 5000);
             String[] fields = GiaoThuc.tachThongDiep(answer);
@@ -221,13 +304,15 @@ public class ClientForm extends JFrame {
                 throw new Exception(fields.length > 1 ? fields[1] : answer);
             }
 
-            SecretKey userKey = CryptoUtil.taoKhoaTuMatKhau(new String(password.getPassword()));
+            SecretKey userKey = CryptoUtil.taoKhoaTuMatKhau(input.password());
             String decryptedSession = CryptoUtil.giaiMa(fields[1], userKey);
             String[] session = GiaoThuc.tachThongDiep(decryptedSession);
 
             sessionKey = session[0];
             ticketExpiry = Long.parseLong(session[1]);
             tgt = fields[2];
+            tgtSessionKey = sessionKey;
+            tgtExpiry = ticketExpiry;
 
             veThongTin("AS-REP nhận thành công; TGT=" + tgt + "\nKhóa phiên Client-TGS=" + sessionKey + "\nHết hạn=" + new Date(ticketExpiry));
             ghi("AS-REP thành công", true);
@@ -240,13 +325,13 @@ public class ClientForm extends JFrame {
                 throw new Exception("Chưa có TGT");
             }
 
-            String user = username.getText().trim();
+            String user = input.username();
             String timestamp = GiaoThuc.timestamp();
-            String auth = CryptoUtil.maHoa(user + "|" + timestamp, khoa(sessionKey));
+            String auth = CryptoUtil.maHoa(user + "|" + timestamp, khoa(tgtSessionKey));
             lastAuthenticator = auth;
 
-            String host = kdcHost.getText().trim();
-            int port = Integer.parseInt(kdcPort.getText().trim());
+            String host = input.kdcHost();
+            int port = input.kdcPort();
 
             String answer = gui(host, port, "TGS-REQ|" + tgt + "|" + auth + "|FileServer", 5000);
             String[] fields = GiaoThuc.tachThongDiep(answer);
@@ -255,12 +340,16 @@ public class ClientForm extends JFrame {
                 throw new Exception(fields.length > 1 ? fields[1] : answer);
             }
 
-            String decryptedSession = CryptoUtil.giaiMa(fields[1], khoa(sessionKey));
+            String decryptedSession = CryptoUtil.giaiMa(fields[1], khoa(tgtSessionKey));
             String[] session = GiaoThuc.tachThongDiep(decryptedSession);
 
             sessionKey = session[0];
             ticketExpiry = Long.parseLong(session[1]);
             serviceTicket = fields[2];
+            apAuthenticated = false;
+            rsaKeyReady = false;
+            lastRsaRequest = null;
+            sequence = 0;
 
             veThongTin("TGT=" + tgt + "\nService Ticket=" + serviceTicket + "\nClient-Service key=" + sessionKey + "\nHết hạn=" + new Date(ticketExpiry));
             ghi("TGS-REP nhận thành công", true);
@@ -273,12 +362,12 @@ public class ClientForm extends JFrame {
                 throw new Exception("Chưa có Service Ticket");
             }
 
-            String user = username.getText().trim();
+            String user = input.username();
             String timestamp = GiaoThuc.timestamp();
             lastAuthenticator = CryptoUtil.maHoa(user + "|" + timestamp, khoa(sessionKey));
 
-            String host = serverHost.getText().trim();
-            int port = Integer.parseInt(serverPort.getText().trim());
+            String host = input.serverHost();
+            int port = input.serverPort();
 
             String answer = gui(host, port, "AP-REQ|" + serviceTicket + "|" + lastAuthenticator, 5000);
             String[] fields = GiaoThuc.tachThongDiep(answer);
@@ -308,8 +397,8 @@ public class ClientForm extends JFrame {
         }
 
         chayNen("Replay AP", () -> {
-            String host = serverHost.getText().trim();
-            int port = Integer.parseInt(serverPort.getText().trim());
+            String host = input.serverHost();
+            int port = input.serverPort();
             String answer = gui(host, port, "AP-REQ|" + serviceTicket + "|" + lastAuthenticator, 5000);
             throw new Exception("Server phản hồi: " + answer);
         });
@@ -321,18 +410,32 @@ public class ClientForm extends JFrame {
             return;
         }
 
-        String payload = Base64.getEncoder().encodeToString(clearText.getText().getBytes(StandardCharsets.UTF_8));
+        byte[] bytes = clearText.getText().getBytes(StandardCharsets.UTF_8);
+        try {
+            RsaUtil.kiemTraGioiHan(bytes.length, (Integer) bits.getSelectedItem());
+        } catch (IllegalArgumentException ex) {
+            ghi(ex.getMessage(), false);
+            return;
+        }
+        String payload = Base64.getEncoder().encodeToString(bytes);
         chayNen("MA_HOA RSA", () -> {
             String result = sendRsaResult("MA_HOA", payload);
-            cipherText.setText(result);
+            SwingUtilities.invokeLater(() -> cipherText.setText(result));
         });
     }
 
     private void giaiMaRsa() {
+        try {
+            byte[] bytes = Base64.getDecoder().decode(cipherText.getText().trim());
+            if (bytes.length != (Integer) bits.getSelectedItem() / 8) throw new IllegalArgumentException("Độ dài bản mã không khớp khóa RSA.");
+        } catch (IllegalArgumentException ex) {
+            ghi("Bản mã Base64 chưa hợp lệ: " + ex.getMessage(), false);
+            return;
+        }
         chayNen("GIAI_MA RSA", () -> {
-            String result = sendRsaResult("GIAI_MA", cipherText.getText().trim());
+            String result = sendRsaResult("GIAI_MA", input.cipher());
             byte[] decoded = Base64.getDecoder().decode(result);
-            resultText.setText(new String(decoded, StandardCharsets.UTF_8));
+            SwingUtilities.invokeLater(() -> resultText.setText(new String(decoded, StandardCharsets.UTF_8)));
         });
     }
 
@@ -351,18 +454,18 @@ public class ClientForm extends JFrame {
             throw new Exception("Cần hoàn tất bước AP");
         }
 
-        String user = username.getText().trim();
+        String user = input.username();
         long seq = ++sequence;
         String timestamp = GiaoThuc.timestamp();
-        Object selectedBits = bits.getSelectedItem();
+        Object selectedBits = input.bits();
 
         String body = user + "|" + seq + "|" + timestamp + "|" + command + "|" + selectedBits + "|" + payload;
         String encrypted = CryptoUtil.maHoa(body, khoa(sessionKey));
 
         lastRsaRequest = "RSA-SVC|" + user + "|" + encrypted;
 
-        String host = serverHost.getText().trim();
-        int port = Integer.parseInt(serverPort.getText().trim());
+        String host = input.serverHost();
+        int port = input.serverPort();
 
         String answer = gui(host, port, lastRsaRequest, 10000);
         String[] fields = GiaoThuc.tachThongDiep(answer);
@@ -386,14 +489,27 @@ public class ClientForm extends JFrame {
         }
 
         chayNen("Replay RSA", () -> {
-            String host = serverHost.getText().trim();
-            int port = Integer.parseInt(serverPort.getText().trim());
+            String host = input.serverHost();
+            int port = input.serverPort();
             String answer = gui(host, port, lastRsaRequest, 10000);
             throw new Exception("Server phản hồi: " + answer);
         });
     }
 
     private void chayNen(String label, CongViecNen congViec) {
+        if (busy) return;
+        try {
+            input = new Input(FormSupport.required(kdcHost.getText().trim(), "Máy chủ KDC"), FormSupport.port(kdcPort.getText()),
+                    FormSupport.required(serverHost.getText().trim(), "Máy chủ dịch vụ"), FormSupport.port(serverPort.getText()),
+                    FormSupport.required(username.getText().trim(), "Tên đăng nhập"),
+                    FormSupport.required(new String(password.getPassword()), "Mật khẩu"),
+                    (Integer) bits.getSelectedItem(), cipherText.getText().trim());
+        } catch (IllegalArgumentException ex) {
+            ghi(ex.getMessage(), false);
+            return;
+        }
+        setBusy(true);
+        activity.setText("Đang xử lý " + label + "…");
         new SwingWorker<Void, Void>() {
             @Override
             protected Void doInBackground() throws Exception {
@@ -407,10 +523,11 @@ public class ClientForm extends JFrame {
                     get();
                 } catch (Exception ex) {
                     ghi(label + " thất bại: " + thongBao(ex), false);
-                    if (label.contains("AP") || label.contains("RSA")) {
-                        serverState.setForeground(Color.RED);
-                    }
+                    activity.setText("Thao tác thất bại — xem nhật ký");
                 }
+                input = null;
+                setBusy(false);
+                expireTickets();
                 capNhatNut();
             }
         }.execute();
@@ -448,8 +565,13 @@ public class ClientForm extends JFrame {
     }
 
     private void capNhatNut() {
-        boolean kdcOk = kdcState.getForeground().equals(new Color(0, 130, 30));
-        boolean srvOk = serverState.getForeground().equals(new Color(0, 130, 30));
+        if (!SwingUtilities.isEventDispatchThread()) {
+            SwingUtilities.invokeLater(this::capNhatNut);
+            return;
+        }
+        if (busy) return;
+        boolean kdcOk = kdcConnected;
+        boolean srvOk = serverConnected;
 
         asButton.setEnabled(kdcOk);
         tgsButton.setEnabled(kdcOk && tgt != null);
@@ -463,7 +585,11 @@ public class ClientForm extends JFrame {
     }
 
     private void ngatKetNoi() {
-        int answer = JOptionPane.showConfirmDialog(this, "Giữ các ticket hiện tại?", "Ngắt kết nối", JOptionPane.YES_NO_OPTION);
+        if (busy) return;
+        int answer = JOptionPane.showConfirmDialog(this, "Giữ các ticket hiện tại?", "Ngắt kết nối", JOptionPane.YES_NO_CANCEL_OPTION);
+        if (answer == JOptionPane.CANCEL_OPTION || answer == JOptionPane.CLOSED_OPTION) return;
+        kdcConnected = false;
+        serverConnected = false;
         setState(true, "Chưa kết nối", Color.GRAY);
         setState(false, "Chưa kết nối", Color.GRAY);
         apAuthenticated = false;
@@ -476,6 +602,13 @@ public class ClientForm extends JFrame {
     }
 
     private void xoaTicket() {
+        if (busy) return;
+        tgtSessionKey = null;
+        tgtExpiry = 0;
+        lastRsaRequest = null;
+        sequence = 0;
+        cipherText.setText("");
+        resultText.setText("");
         tgt = null;
         serviceTicket = null;
         sessionKey = null;
@@ -485,6 +618,49 @@ public class ClientForm extends JFrame {
         rsaKeyReady = false;
         ticketInfo.setText("");
         capNhatNut();
+    }
+
+    private void setBusy(boolean value) {
+        busy = value;
+        if (value) {
+            enabledBefore.clear();
+            freeze(getContentPane());
+            activity.setText("Đang xử lý…");
+        } else {
+            enabledBefore.forEach(java.awt.Component::setEnabled);
+            enabledBefore.clear();
+            if (activity.getText().startsWith("Đang")) activity.setText("Sẵn sàng");
+        }
+    }
+
+    private void freeze(java.awt.Container parent) {
+        for (java.awt.Component child : parent.getComponents()) {
+            if (child instanceof javax.swing.AbstractButton || child instanceof JTextField || child instanceof JComboBox<?>) {
+                enabledBefore.put(child, child.isEnabled());
+                child.setEnabled(false);
+            }
+            if (child instanceof java.awt.Container container) freeze(container);
+        }
+    }
+
+    private void expireTickets() {
+        if (busy) return;
+        long now = System.currentTimeMillis();
+        if (tgt != null && tgtExpiry <= now) {
+            tgt = null;
+            tgtSessionKey = null;
+        }
+        if (ticketExpiry > 0 && ticketExpiry <= now) {
+            xoaTicket();
+            ghi("Vé đã hết hạn. Vui lòng đăng nhập lại.", false);
+        }
+        capNhatNut();
+    }
+
+    @Override
+    public void dispose() {
+        expiryTimer.stop();
+        super.dispose();
     }
 
     private void veThongTin(String text) {
@@ -503,7 +679,7 @@ public class ClientForm extends JFrame {
         SwingUtilities.invokeLater(() -> {
             String gio = new SimpleDateFormat("HH:mm:ss").format(new Date());
             String trangThai = ok ? "THÀNH CÔNG" : "THẤT BẠI";
-            log.append("[" + gio + "] [" + trangThai + "] " + text + "\n");
+            FormSupport.appendLog(log, "[" + gio + "] [" + trangThai + "] " + text + "\n");
         });
     }
 

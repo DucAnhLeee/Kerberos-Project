@@ -8,17 +8,17 @@ public final class DemoLauncher {
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
-            KDCAdminForm kdcForm = new KDCAdminForm();
-            ServiceServerForm serviceForm = new ServiceServerForm();
-            ClientForm clientForm = new ClientForm();
-
-            kdcForm.setLocation(30, 30);
-            serviceForm.setLocation(70, 70);
-            clientForm.setLocation(110, 110);
-
-            kdcForm.setVisible(true);
-            serviceForm.setVisible(true);
-            clientForm.setVisible(true);
+            DesktopTheme.install();
+            javax.swing.JFrame[] windows = {new KDCAdminForm(), new ServiceServerForm(), new ClientForm()};
+            java.awt.Rectangle screen = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+            for (int i = 0; i < windows.length; i++) {
+                javax.swing.JFrame window = windows[i];
+                int offset = i * 24;
+                window.setSize(Math.min(window.getWidth(), screen.width - 48), Math.min(window.getHeight(), screen.height - 48));
+                window.setLocation(screen.x + Math.min(offset, screen.width - window.getWidth()),
+                        screen.y + Math.min(offset, screen.height - window.getHeight()));
+                window.setVisible(true);
+            }
         });
     }
 }

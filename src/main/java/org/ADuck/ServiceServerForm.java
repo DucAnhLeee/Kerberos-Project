@@ -20,18 +20,22 @@ public class ServiceServerForm extends JFrame {
     private final JTextField kdcHost = new JTextField("localhost", 9);
     private final JTextField kdcPort = new JTextField("8888", 5);
     private final JLabel state = new JLabel("Đã dừng");
+    private final JButton start = new JButton("Khởi động");
+    private final JButton stop = new JButton("Dừng máy chủ");
     private final JTextArea log = new JTextArea(14, 65);
-    private final DefaultTableModel tickets = new DefaultTableModel(new String[]{"Client", "Trạng thái", "Hết hạn"}, 0);
-    private final DefaultTableModel rsa = new DefaultTableModel(new String[]{"Client", "Bit", "Public key"}, 0);
-    private final DefaultTableModel requests = new DefaultTableModel(new String[]{"Thời gian", "Client", "Lệnh", "Bit", "Kết quả", "ms"}, 0);
+    private final DefaultTableModel tickets = FormSupport.model("Client", "Trạng thái", "Hết hạn");
+    private final DefaultTableModel rsa = FormSupport.model("Client", "Bit", "Public key");
+    private final DefaultTableModel requests = FormSupport.model("Thời gian", "Client", "Lệnh", "Bit", "Kết quả", "ms");
 
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     private final Map<String, Map<Integer, KeyPair>> keys = new ConcurrentHashMap<>();
     private final Set<String> authenticators = ConcurrentHashMap.newKeySet();
 
-    private volatile boolean running;
-    private volatile ServerSocket server;
-    private int connections;
+    private final java.util.concurrent.atomic.AtomicInteger connections = new java.util.concurrent.atomic.AtomicInteger();
+    private volatile String activeService;
+    private volatile String activeSecret;
+    private volatile String activeKdcHost;
+    private volatile int activeKdcPort;
 
     public ServiceServerForm() {
         super("Kerberos Service Server");
@@ -47,7 +51,8 @@ public class ServiceServerForm extends JFrame {
         tabs.add("Log", new JScrollPane(log));
         add(tabs, BorderLayout.CENTER);
 
-        setSize(1100, 700);
+        DesktopTheme.finish(this, "Máy chủ dịch vụ", "Xác thực vé · Quản lý phiên · Dịch vụ RSA");
+        setSize(1180, 800);
         setMinimumSize(new Dimension(900, 600));
         setLocationRelativeTo(null);
     }
@@ -55,8 +60,7 @@ public class ServiceServerForm extends JFrame {
     private JPanel buildControls() {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
 
-        JButton start = new JButton("Bật");
-        JButton stop = new JButton("Tắt");
+        stop.setEnabled(false);
 
         start.addActionListener(e -> startServer());
         stop.addActionListener(e -> stopServer());
@@ -74,50 +78,62 @@ public class ServiceServerForm extends JFrame {
         panel.add(kdcHost);
         panel.add(kdcPort);
 
-        return panel;
+        return DesktopTheme.stack(
+                DesktopTheme.card("Cấu hình dịch vụ", DesktopTheme.fields(
+                        "Tên dịch vụ", service, "Khóa bí mật", secret, "Cổng lắng nghe", port)),
+                DesktopTheme.card("Trung tâm phân phối khóa", DesktopTheme.fields(
+                        "Máy chủ KDC", kdcHost, "Cổng KDC", kdcPort)),
+                DesktopTheme.actions(start, stop, state));
     }
 
+    private final ServerLifecycle lifecycle = new ServerLifecycle();
+
     private void startServer() {
-        new SwingWorker<Void, Void>() {
-            @Override
-            protected Void doInBackground() throws Exception {
-                int portNumber = Integer.parseInt(port.getText().trim());
-                server = new ServerSocket(portNumber);
-                running = true;
-
-                SwingUtilities.invokeLater(() -> {
-                    state.setText("Đang chạy " + lanIp() + ":" + port.getText());
-                });
-
-                while (running) {
-                    Socket socket = server.accept();
-                    connections++;
-                    new Thread(() -> phucVu(socket)).start();
-                }
-                return null;
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    get();
-                } catch (Exception ex) {
-                    ghi("Không mở được cổng: " + ex.getMessage(), false);
-                    state.setText("Lỗi/Đã dừng");
-                }
-            }
-        }.execute();
+        try {
+            int number = FormSupport.port(port.getText());
+            FormSupport.port(kdcPort.getText());
+            FormSupport.required(kdcHost.getText().trim(), "Máy chủ KDC");
+            FormSupport.required(service.getText().trim(), "Tên dịch vụ");
+            FormSupport.required(new String(secret.getPassword()), "Khóa dịch vụ");
+            if (lifecycle.state() == ServerLifecycle.State.RUNNING || lifecycle.state() == ServerLifecycle.State.STARTING || lifecycle.state() == ServerLifecycle.State.STOPPING) return;
+            activeService = service.getText().trim();
+            activeSecret = new String(secret.getPassword());
+            activeKdcHost = kdcHost.getText().trim();
+            activeKdcPort = FormSupport.port(kdcPort.getText());
+            configurationEnabled(false);
+            lifecycle.start(number, this::phucVu, text -> {
+                state.setText(text);
+                start.setEnabled(lifecycle.state() == ServerLifecycle.State.ERROR);
+                stop.setEnabled(lifecycle.state() != ServerLifecycle.State.ERROR);
+                if (lifecycle.state() == ServerLifecycle.State.ERROR) configurationEnabled(true);
+            });
+        } catch (IllegalArgumentException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Cấu hình chưa hợp lệ", JOptionPane.WARNING_MESSAGE);
+        }
     }
 
     private void stopServer() {
-        running = false;
-        try {
-            if (server != null && !server.isClosed()) {
-                server.close();
-            }
-        } catch (IOException ignored) {
-        }
-        state.setText("Đã dừng");
+        state.setText("Đang dừng…");
+        start.setEnabled(false);
+        stop.setEnabled(false);
+        lifecycle.stop(() -> {
+            sessions.clear();
+            keys.clear();
+            authenticators.clear();
+            configurationEnabled(true);
+            start.setEnabled(true);
+            state.setText("Đã dừng");
+        });
+    }
+
+    private void configurationEnabled(boolean enabled) {
+        for (JComponent component : new JComponent[]{service, secret, port, kdcHost, kdcPort}) component.setEnabled(enabled);
+    }
+
+    @Override
+    public void dispose() {
+        lifecycle.close();
+        super.dispose();
     }
 
     private void phucVu(Socket socket) {
@@ -131,13 +147,18 @@ public class ServiceServerForm extends JFrame {
             }
 
             String[] cacTruong = GiaoThuc.tachThongDiep(request);
-            ghi("Client " + socket.getInetAddress().getHostAddress() + " gửi " + cacTruong[0] + " #" + connections, true);
+            ghi("Client " + socket.getInetAddress().getHostAddress() + " gửi " + cacTruong[0] + " #" + connections.incrementAndGet(), true);
 
             String response;
             if (cacTruong[0].equals("PING")) {
-                response = "PONG|" + service.getText().trim() + "|" + GiaoThuc.VERSION;
+                response = "PONG|" + activeService + "|" + GiaoThuc.VERSION;
             } else {
-                response = xuLy(cacTruong);
+                try {
+                    response = xuLy(cacTruong);
+                } catch (Exception ex) {
+                    response = "ERR|" + ex.getMessage();
+                    ghi(ex.getMessage(), false);
+                }
             }
 
             out.write(response);
@@ -160,7 +181,7 @@ public class ServiceServerForm extends JFrame {
     }
 
     private String xuLyAP(String[] cacTruong) throws Exception {
-        String servicePassword = new String(secret.getPassword());
+        String servicePassword = activeSecret;
         SecretKey serviceKey = CryptoUtil.taoKhoaTuMatKhau(servicePassword);
 
         String[] ticket = GiaoThuc.tachThongDiep(CryptoUtil.giaiMa(cacTruong[1], serviceKey));
@@ -169,7 +190,7 @@ public class ServiceServerForm extends JFrame {
         long ticketExpiry = Long.parseLong(ticket[2]);
         String ticketService = ticket[3];
 
-        if (!ticketService.equals(service.getText().trim())) {
+        if (!ticketService.equals(activeService)) {
             throw new Exception("Service Ticket dành cho dịch vụ khác");
         }
 
@@ -297,8 +318,8 @@ public class ServiceServerForm extends JFrame {
 
     private boolean kiemTraKdc(String user) {
         try {
-            int portNumber = Integer.parseInt(kdcPort.getText().trim());
-            String request = "CHECK-SERVICE|" + user + "|" + service.getText().trim();
+            int portNumber = activeKdcPort;
+            String request = "CHECK-SERVICE|" + user + "|" + activeService;
             String response = gui(portNumber, request);
             return "CHECK-OK".equals(response);
         } catch (Exception ex) {
@@ -309,7 +330,7 @@ public class ServiceServerForm extends JFrame {
 
     private String gui(int targetPort, String line) throws Exception {
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(kdcHost.getText().trim(), targetPort), 3000);
+            socket.connect(new InetSocketAddress(activeKdcHost, targetPort), 3000);
             socket.setSoTimeout(3000);
 
             BufferedWriter out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
@@ -328,19 +349,11 @@ public class ServiceServerForm extends JFrame {
         return new SecretKeySpec(keyBytes, "AES");
     }
 
-    private String lanIp() {
-        try {
-            return InetAddress.getLocalHost().getHostAddress();
-        } catch (Exception ex) {
-            return "localhost";
-        }
-    }
-
     private void ghi(String text, boolean ok) {
         SwingUtilities.invokeLater(() -> {
             String gio = new SimpleDateFormat("HH:mm:ss").format(new Date());
             String trangThai = ok ? "OK" : "LỖI";
-            log.append("[" + gio + "] [" + trangThai + "] " + text + "\n");
+            FormSupport.appendLog(log, "[" + gio + "] [" + trangThai + "] " + text + "\n");
         });
     }
 
